@@ -57,7 +57,6 @@
   <script type="text/babel">
     const { useState, useMemo, useEffect, useRef } = React;
 
-    // 🔴 ใส่ Web App Exec URL ที่ได้จากการ Deploy Apps Script ที่นี่
     const GAS_API_URL = "https://script.google.com/macros/s/AKfycbwdH13ahYYoTY2vdfR1rdU2aQbCGUV6DYqIEfQ2Vdn9Vryvc7ncX5CTrLrcEWffQmZO/exec";
 
     // Icons
@@ -198,55 +197,61 @@
         if(section) section.scrollIntoView({ behavior: 'smooth' }); 
       };
 
-      // Fetch Sheet Data via Web API
+      // ========================================================
+      // 🚀 ดึงข้อมูลพร้อมระบบแคชด่วน (Stale-While-Revalidate)
+      // ========================================================
       useEffect(() => {
-        if (!GAS_API_URL.includes("YOUR_SCRIPT_ID")) {
-          fetch(`${GAS_API_URL}?action=getSheetData`)
-            .then(res => res.json())
-            .then(response => {
-              if (response.status === 'success') {
-                setDatabase(response.data);
-                setTabOrderList(response.tabOrder || Object.keys(response.data));
-                if (response.tabOrder && response.tabOrder.includes("NEWS")) {
-                  setActiveTab("NEWS");
-                } else if (response.tabOrder && response.tabOrder.length > 0) {
-                  setActiveTab(response.tabOrder[0]);
-                }
-              }
-              setIsLoading(false);
-            })
-            .catch(() => setIsLoading(false));
-        } else {
-          // Demo fallback
-          const mock = { "NEWS": [{ id: "n1", date: "2026-04-01", subcategory: "ทั่วไป", title: "ยินดีต้อนรับสู่ Birds of Paradise Blogs", content1: "ระบบเชื่อมต่อ API สำเร็จ สามารถนำไปโฮสต์บน GitHub Pages ได้ทันที", content2: "ตัวอย่างเนื้อหาท่อนที่สอง" }] };
-          setTimeout(() => {
-            setDatabase(mock);
-            setTabOrderList(["NEWS"]);
-            setActiveTab("NEWS");
-            setIsLoading(false);
-          }, 800);
+        // 1. ดึงแคชเก่ามาแสดงผลทันทีก่อน (ถ้ามี)
+        const cachedData = localStorage.getItem("bop_cached_database");
+        const cachedTabs = localStorage.getItem("bop_cached_tabs");
+        if (cachedData && cachedTabs) {
+          try {
+            const parsedData = JSON.parse(cachedData);
+            const parsedTabs = JSON.parse(cachedTabs);
+            setDatabase(parsedData);
+            setTabOrderList(parsedTabs);
+            if (parsedTabs.includes("NEWS")) setActiveTab("NEWS");
+            else if (parsedTabs.length > 0) setActiveTab(parsedTabs[0]);
+            setIsLoading(false); // ปิดการหมุนทันที แสดงหน้าจอทันที!
+          } catch(e) {}
         }
+
+        // 2. ดึงข้อมูลจริงจาก API มาอัปเดตเบื้องหลัง (Background Sync)
+        fetch(`${GAS_API_URL}?action=getSheetData`)
+          .then(res => res.json())
+          .then(response => {
+            if (response.status === 'success') {
+              setDatabase(response.data);
+              const tabs = response.tabOrder || Object.keys(response.data);
+              setTabOrderList(tabs);
+              if (!activeTab) {
+                if (tabs.includes("NEWS")) setActiveTab("NEWS");
+                else if (tabs.length > 0) setActiveTab(tabs[0]);
+              }
+              // บันทึกแคชเวอร์ชันล่าสุดเก็บไว้
+              localStorage.setItem("bop_cached_database", JSON.stringify(response.data));
+              localStorage.setItem("bop_cached_tabs", JSON.stringify(tabs));
+            }
+            setIsLoading(false);
+          })
+          .catch(() => setIsLoading(false));
       }, []);
 
-      // Load Engagement
+      // โหลดสถิติบทความ
       useEffect(() => {
         if (viewingArticle) {
           const likedStatus = localStorage.getItem(`liked_${viewingArticle.id}`) === 'true';
           setHasLiked(likedStatus);
           setArticleStats({ views: 0, likes: 0, comments: [] });
 
-          if (!GAS_API_URL.includes("YOUR_SCRIPT_ID")) {
-            fetch(GAS_API_URL, {
-              method: 'POST',
-              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-              body: JSON.stringify({ action: 'recordAction', type: 'view', articleId: viewingArticle.id, data: null })
-            })
-            .then(res => res.json())
-            .then(res => setArticleStats(res))
-            .catch(() => {});
-          } else {
-            setArticleStats({ views: 108, likes: 25, comments: [{ name: 'ผู้อ่าน', text: 'ขอบคุณสำหรับสาระความรู้ดีๆ ครับ', date: new Date().toISOString() }] });
-          }
+          fetch(GAS_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'recordAction', type: 'view', articleId: viewingArticle.id, data: null })
+          })
+          .then(res => res.json())
+          .then(res => setArticleStats(res))
+          .catch(() => {});
         }
       }, [viewingArticle]);
 
@@ -256,16 +261,14 @@
         localStorage.setItem(`liked_${viewingArticle.id}`, newLikeStatus);
         setArticleStats(prev => ({ ...prev, likes: Math.max(0, prev.likes + (newLikeStatus ? 1 : -1)) }));
 
-        if (!GAS_API_URL.includes("YOUR_SCRIPT_ID")) {
-          fetch(GAS_API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'recordAction', type: newLikeStatus ? 'like' : 'unlike', articleId: viewingArticle.id, data: null })
-          })
-          .then(res => res.json())
-          .then(res => setArticleStats(res))
-          .catch(() => {});
-        }
+        fetch(GAS_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'recordAction', type: newLikeStatus ? 'like' : 'unlike', articleId: viewingArticle.id, data: null })
+        })
+        .then(res => res.json())
+        .then(res => setArticleStats(res))
+        .catch(() => {});
       };
 
       const submitComment = (e) => {
@@ -273,28 +276,19 @@
         setIsCommentSubmitting(true);
         const data = { name: e.target.name.value, text: e.target.text.value };
 
-        if (!GAS_API_URL.includes("YOUR_SCRIPT_ID")) {
-          fetch(GAS_API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'recordAction', type: 'comment', articleId: viewingArticle.id, data: data })
-          })
-          .then(res => res.json())
-          .then(res => {
-            setArticleStats(res);
-            setIsCommentSubmitting(false);
-            e.target.reset();
-            showToast("ส่งความคิดเห็นเรียบร้อยแล้ว");
-          })
-          .catch(() => setIsCommentSubmitting(false));
-        } else {
-          setTimeout(() => {
-            setArticleStats(prev => ({ ...prev, comments: [{ name: data.name, text: data.text, date: new Date().toISOString() }, ...prev.comments] }));
-            setIsCommentSubmitting(false);
-            e.target.reset();
-            showToast("ส่งความคิดเห็นเรียบร้อยแล้ว");
-          }, 600);
-        }
+        fetch(GAS_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'recordAction', type: 'comment', articleId: viewingArticle.id, data: data })
+        })
+        .then(res => res.json())
+        .then(res => {
+          setArticleStats(res);
+          setIsCommentSubmitting(false);
+          e.target.reset();
+          showToast("ส่งความคิดเห็นเรียบร้อยแล้ว");
+        })
+        .catch(() => setIsCommentSubmitting(false));
       };
 
       const copyToClipboard = (text, label) => {
@@ -320,26 +314,18 @@
         setIsContactSubmitting(true);
         const data = { name: new FormData(e.target).get("name"), contact: new FormData(e.target).get("contact"), type: contactType, detail: new FormData(e.target).get("detail") };
         
-        if (!GAS_API_URL.includes("YOUR_SCRIPT_ID")) {
-          fetch(GAS_API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'processContactForm', data: data })
-          })
-          .then(res => res.json())
-          .then(() => {
-            setIsContactSubmitting(false);
-            e.target.reset();
-            showToast("ส่งข้อความถึงทีมงานเรียบร้อยแล้ว!");
-          })
-          .catch(() => setIsContactSubmitting(false));
-        } else {
-          setTimeout(() => {
-            setIsContactSubmitting(false);
-            e.target.reset();
-            showToast("ส่งข้อความเรียบร้อยแล้ว!");
-          }, 800);
-        }
+        fetch(GAS_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'processContactForm', data: data })
+        })
+        .then(res => res.json())
+        .then(() => {
+          setIsContactSubmitting(false);
+          e.target.reset();
+          showToast("ส่งข้อความถึงทีมงานเรียบร้อยแล้ว!");
+        })
+        .catch(() => setIsContactSubmitting(false));
       };
 
       const handleShare = async () => {
@@ -354,7 +340,7 @@
         <div className={`min-h-screen ${t.bgApp} transition-colors duration-400 font-${currentFontFamily.toLowerCase()}`}>
           {/* Toast Notification */}
           {toastMessage && (
-            <div className="fixed bottom-6 right-6 z-50 bg-black/85 backdrop-blur-md text-white px-5 py-3 rounded-2xl shadow-2xl border border-white/10 text-sm font-medium">
+            <div className="fixed bottom-6 right-6 z-50 bg-black/85 backdrop-blur-md text-white px-5 py-3 rounded-2xl shadow-2xl border border-white/10 text-sm font-medium animate-bounce">
               {toastMessage}
             </div>
           )}
@@ -425,7 +411,7 @@
                       <div className={`p-5 rounded-2xl mb-8 border ${t.hr} bg-black/5 no-print`}>
                         <p className={`font-bold text-xs uppercase tracking-wider mb-3 ${t.textMuted}`}>สารบัญหัวข้อ</p>
                         <div className="flex flex-wrap gap-2">
-                          {[1, 2, 3, 4, 5].map(num => hasContentPart(viewingArticle, num) && (
+                          {.map(num => hasContentPart(viewingArticle, num) && (
                             <button key={num} onClick={(e) => scrollToSection(e, num)} className={`px-3.5 py-1.5 rounded-xl text-xs font-medium border ${t.hr} ${t.inputSearch} hover:border-[#1D9A9F] transition-all`}>
                               ส่วนที่ {num}
                             </button>
@@ -441,7 +427,7 @@
                     )}
 
                     <div className={`space-y-8 ${t.textMain} leading-relaxed`}>
-                      {[1, 2, 3, 4, 5].map((num) => {
+                      {.map((num) => {
                         if (!hasContentPart(viewingArticle, num)) return null;
                         return (
                           <div key={num} id={`section-${num}`} className="scroll-mt-24">
@@ -466,7 +452,7 @@
                     
                     {/* Action Bar */}
                     <div className={`mt-10 pt-8 border-t ${t.hr} flex items-center justify-center no-print`}>
-                      <button onClick={handleLikeToggle} className={`flex items-center gap-2.5 px-6 py-3 rounded-full font-bold transition-all border ${hasLiked ? 'bg-rose-500/15 border-rose-500/40 text-rose-500 shadow-sm' : `${t.inputSearch} ${t.textMuted} hover:scale-105`}`}>
+                      <button onClick={handleLikeToggle} className={`flex items-center gap-2.5 px-6 py-3 rounded-full font-bold transition-all border ${hasLiked ? 'bg-rose-500/15 border-rose-500/40 text-rose-500 shadow-sm' : `${t.inputSearch}${t.textMuted} hover:scale-105`}`}>
                         <IconHeart solid={hasLiked} /> {hasLiked ? 'ถูกใจแล้ว' : 'ส่งกำลังใจให้บทความนี้'} ({articleStats.likes})
                       </button>
                     </div>
@@ -633,7 +619,7 @@
 
                     {isLoading ? (
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {[1, 2, 3, 4, 5, 6].map(i => (
+                        {.map(i => (
                           <div key={i} className={`${t.bgCard} rounded-2xl border ${t.hr} overflow-hidden animate-pulse`}>
                             <div className={`h-48 ${t.skeletonBg}`}></div>
                             <div className="p-5 space-y-3">
